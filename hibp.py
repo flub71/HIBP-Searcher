@@ -1,7 +1,8 @@
+import os
 import re
 import time
 import constants
-
+from termcolor import colored, cprint
 from urlextract import URLExtract
 import requests
 from requests.utils import requote_uri
@@ -10,23 +11,27 @@ import pandas as pd
 api_key = constants.api_key  # API Key
 services = ("Account Breaches", "Public Pastes", "Both")  # Possible API Services
 headers = {f'hibp-api-key': api_key, 'user-agent': 'Python'}
-default_path = "C:/hibp/users.csv"
 
-# Store the finds
-breach_data_store = []
-paste_data_store = []
+default_path = "C:\\hibp\\"
+default_input_path = default_path + "input.csv"
 
-# Store the found emails for storing in CSV later
-accs_found_in_breaches = []
-accs_found_in_pastes = []
+data_for_csv = []
 
 extractor = URLExtract()
+
+
+def request_delay(increase):
+    if increase > 0:
+        api_request_delay = increase
+    else:
+        api_request_delay = 0
+    return api_request_delay
+
 
 separator = "----------------------------------------------------"
 
 
 def check_breaches(email):
-    print(f"Checking Breaches for: {email}")
     # Encode the URL ready for the request1
     enc_email = requote_uri(email)
     # Headers to provide
@@ -39,41 +44,49 @@ def check_breaches(email):
         case 200:
             req.raise_for_status()
             breaches = req.json()
-            breach_data_store.append(email)
+            # Get the data from each breach
             for breach in breaches:
-                formatted_breach_name = "{0} {1} {2} {3}".format("Breach Name: ", breach["Name"], "\nBreach Date: ",
-                                                                 breach["BreachDate"])
-                breach_data_store.append(formatted_breach_name)
-                breach_data_store.append("Data Contained:")
                 data_classes = breach["DataClasses"]
-                breach_data_store.append(data_classes)
                 description = breach["Description"]
                 urls = extractor.find_urls(description)
+                url_for_csv = ""
                 for url in urls:
-                    breach_data_store.append(f"More Info: {url}")
-                breach_data_store.append(separator)
+                    url_for_csv = url
+
+                # Check if it contains passwords
+                contains_passwords = False
+                for data_class in data_classes:
+                    if data_class == 'Passwords':
+                        contains_passwords = True
+                data_for_csv.append(
+                    [email, breach["Name"], "Breach", breach["BreachDate"], contains_passwords, url_for_csv])
         case 400:
-            print(
-                f"Bad Request. Check that {email} is formatted properly!")
+            cprint(
+                f"Bad Request. Check that {email} is formatted properly!", "red")
         case 401:
-            print(f"API Key: {api_key} was not valid!")
+            cprint(f"API Key: {api_key} was not valid!", "red")
             exit()
         case 403:
-            print("User Agent was not valid!")
+            cprint("User Agent was not valid!", "red")
             exit()
         case 404:
-            # print(f"No breach for {email}!")
+            # 404 Means no breach was found
             pass
         case 429:
-            print("RATE LIMIT EXCEEDED")
-            exit()
+            # Get request delay
+            response = req.json()
+            find_delay = re.search(r"\d", response['message'])
+            if find_delay:
+                request_delay(int(find_delay.group(0)))
+            else:
+                request_delay(2)
+            # print(f"RATE LIMITED. NEW REQUEST DELAY: {find_delay.group(0)}")
         case 503:
-            print("Service Currently Unavailable!")
+            cprint("Service Currently Unavailable!", "red")
             exit()
 
 
 def check_pastes(email):
-    print(f"Checking Pastes for: {email}")
     # Encode the URL ready for the request1
     enc_email = requote_uri(email)
     # Generate the request
@@ -85,149 +98,126 @@ def check_pastes(email):
         case 200:
             req.raise_for_status()
             pastes = req.json()
-            paste_data_store.append(separator)
-            paste_data_store.append(email)
             for paste in pastes:
                 date = re.search(r"\d\d\d\d-\d\d-\d\d", paste["Date"])
-                formatted_paste = "{0} {1} {2} {3} {4} {5} {6} {7}".format("Source: ", paste["Source"], "\nID: ",
-                                                                           paste["Id"], "\nTitle: ", paste["Title"],
-                                                                           "\nDate: ", date.group(0))
-                paste_data_store.append(formatted_paste)
-                paste_data_store.append(separator)
+                data_for_csv.append(
+                    [email, paste["Source"], "Paste", date.group(0), "Unknown", paste["Id"]])
         case 400:
-            print(
-                f"Bad Request. Check that {email} is formatted properly!")
+            cprint(
+                f"Bad Request. Check that {email} is formatted properly!", "red")
         case 401:
-            print(f"API Key: {api_key} was not valid!")
+            cprint(f"API Key: {api_key} was not valid!", "red")
             exit()
         case 403:
-            print("User Agent was not valid!")
+            cprint("User Agent was not valid!", "red")
             exit()
         case 404:
-            # print(f"No breach for {email}!")
+            # Means no match found
             pass
         case 429:
-            print("RATE LIMIT EXCEEDED")
-            exit()
+            # Get request delay
+            response = req.json()
+            find_delay = re.search(r"\d", response['message'])
+            if find_delay:
+                request_delay(int(find_delay.group(0)))
+            else:
+                request_delay(2)
+            # print(f"RATE LIMITED. NEW REQUEST DELAY: {find_delay.group(0)}")
         case 503:
-            print("Service Currently Unavailable!")
+            cprint("Service Currently Unavailable!", "red")
             exit()
 
 
-def generate_breach_results():
-    if len(breach_data_store) > 0:
-        # Print a list of breached accounts
-        for breach_data in breach_data_store:
-            breached_account = re.search(r'[\w.+-]+@[\w-]+\.[\w.-]+', str(breach_data))  # Finds emails
-            if breached_account:
-                accs_found_in_breaches.append(breached_account.group(0))
-        print(
-            f"Account breaches: {len(accs_found_in_breaches)}... List of detected email addresses:")
-        for user_email in accs_found_in_breaches:
-            print(user_email)
-        print("Breach Data:")
-        for breach_data in breach_data_store:
-            print(breach_data)
+file = default_input_path  # Trying to set the default location.
+while True:
+    if os.path.isfile(file):
+        break
     else:
-        print("No breached accounts detected - Woo!")
+        cprint(f"Unable to find: {default_input_path}..\n", "red")
+        file = input(colored("Please enter the full path of the input file: ", "magenta"))
 
-
-def generate_paste_results():
-    if len(paste_data_store) > 0:
-        # Print a list of breached accounts
-        for paste_data in paste_data_store:
-            found_account = re.search(r'[\w.+-]+@[\w-]+\.[\w.-]+', str(paste_data))  # Finds emails
-            if found_account:
-                accs_found_in_pastes.append(found_account.group(0))
-        print(
-            f"Accounts found in pastes:: {len(accs_found_in_pastes)}... List of detected email addresses:")
-        for user_email in accs_found_in_pastes:
-            print(user_email)
-        print("Paste Data:")
-        for paste_data in paste_data_store:
-            print(paste_data)
-    else:
-        print("No accounts found in pastes! - Woo!")
-
-
-def print_results(service_selected):
-    print("Checks have finished!\n")
-    match service_selected:
-        case 1:
-            generate_breach_results()
-        case 2:
-            generate_paste_results()
-        case 3:
-            generate_breach_results()
-            generate_paste_results()
-
+cprint(f"Loading data from: {file}..", "cyan")
 
 try:
-    file = default_path  # Location of CSV
-except FileNotFoundError:
-    print(f"Error loading data from: {default_path}..\n")
-    path = input("Please enter the path including the file itself: ")
-    try:
-        file = path
-    except FileNotFoundError:
-        print(f"There was another error with the file: {file}\n")
-        print("Exiting.. Try again after checking the path!")
-        exit()
-
-print(f"Loading data from: {file}..")
-
-data = pd.read_csv(file)  # Reads the CSV
+    data = pd.read_csv(file)  # Reads the CSV
+except FileNotFoundError as error:
+    cprint(f"{error}.. Exiting!", "red")
+    exit()
 
 if data.size > 0:
-    print(f"Data read successfully... found {data.size} emails!")
+    cprint(f"Success! {data.size} emails found!\n", "green")
 else:
-    print(f"Unable to find any records. Check for data in: {file}")
+    cprint(f"Unable to find any records. Check for data in: {file}", "yellow")
 
 # Ask the user to select a service to check
-print(f"Services available: 1: {services[0]}, 2: {services[1]}, 3: Both")
+cprint(f"Services available: 1: {services[0]}, 2: {services[1]}, 3: Both\n", "cyan")
 
 # Attempt to capture input
-try:
-    selection = int(
-        input("Which service should we check? (Enter the number): \n"))
-except ValueError:
-    print("You need to enter the number of the service you want to check!\n")
+while True:
     try:
-        selection = int(
-            input("Which service should we check? (Enter the number): "))
+        selection = int(input(colored("Which service should we check? (Enter the number, (Default 3): ", "magenta",
+                                      attrs=['bold']) or 3))
+
+        break
     except ValueError:
-        print("We can't detect a number. Exiting...")
-        exit()
+        cprint("\nPlease enter a valid choice: 1-3\n", "yellow")
 
 if isinstance(selection, int):
     pass
 else:
-    print(f"Error reading input.. Detected: {selection}")
+    cprint(f"Error reading input.. Detected: {selection}", "red")
     exit()
 
-if selection > 3:
+if selection < 1:
+    selection = 1
+elif selection > 3:
     selection = 3
 
-print(f"service Chosen: {services[selection - 1]}")
+cprint(f"service Chosen: {services[selection - 1]}", "cyan")
+
+
+def save_to_csv():
+    col_names = ["Email", "Name", "Type", "Date", "Has Passwords", "URL or ID"]
+    df = pd.DataFrame(data=data_for_csv, columns=col_names)
+    output_location = input(
+        colored("Where should we save the results? (Default: C:\\hibp): ", "magenta", attrs=['bold']))
+    if len(output_location) == 0:
+        output_location = default_path
+    output_file_name = input(
+        colored("What do you want to call the file? (Default: output.csv): ", "magenta", attrs=['bold']))
+    if len(output_file_name) == 0:
+        output_file_name = "output.csv"
+    final_save = output_location + output_file_name
+    df = df.drop_duplicates()
+    df.to_csv(final_save, index=False)
+    cprint(f"Successfully written to {final_save}", "green")
+    open_now = input("Open results now? y/N")
+    if open_now.lower() == "y":
+        os.startfile(final_save)
+    else:
+        exit()
 
 
 def run_checks(service_to_check):
     match service_to_check:
         case 1:
+            cprint(f"Running service checks on: {services[0]}", "cyan")
             for email in data.emails:
                 check_breaches(email)
-                time.sleep(2)
+                time.sleep(request_delay(0))
         case 2:
+            cprint(f"Running service checks on: {services[1]}", "cyan")
             for email in data.emails:
                 check_pastes(email)
-                time.sleep(2)
+                time.sleep(request_delay(0))
         case 3:
+            cprint(f"Running service checks on: {services[0]}, {services[1]}", "cyan")
             for email in data.emails:
                 check_breaches(email)
-                time.sleep(2)
+                time.sleep(request_delay(0))
                 check_pastes(email)
-                time.sleep(2)
-    print_results(selection)
+                time.sleep(request_delay(0))
+    save_to_csv()
 
 
 run_checks(selection)
