@@ -156,8 +156,7 @@ cprint(f"Services available: 1: {services[0]}, 2: {services[1]}, 3: Both\n", "cy
 while True:
     try:
         selection = int(input(colored("Which service should we check? (Enter the number, (Default 3): ", "magenta",
-                                      attrs=['bold']) or 3))
-
+                                      attrs=['bold'])) or 3)
         break
     except ValueError:
         cprint("\nPlease enter a valid choice: 1-3\n", "yellow")
